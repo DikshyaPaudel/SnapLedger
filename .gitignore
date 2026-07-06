@@ -1,0 +1,18 @@
+# Environment variables (contains your API key -- NEVER commit this)
+.env
+
+# Virtual environment
+env/
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS junk
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
