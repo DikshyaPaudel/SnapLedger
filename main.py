@@ -1,84 +1,43 @@
 """
-Day 2: Wrap yesterday's extraction logic into a real API.
+Day 6: /extract now enqueues a background job instead of blocking on Gemini.
+The actual extraction logic lives in worker.py (runs as a separate process).
 
-Run with:
+Run the API with:
     uvicorn main:app --reload
 
-Then open http://127.0.0.1:8000/docs in your browser -- FastAPI
-auto-generates an interactive UI where you can upload a receipt image
-directly and see the response, no Postman needed.
+Run the worker in a SEPARATE terminal:
+    arq worker.WorkerSettings
+
+Then open http://127.0.0.1:8000/docs to try it.
 """
 
-import os
-import json
-import tempfile
-import google.generativeai as genai
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from sqlalchemy.orm import Session
+from arq import create_pool
+from arq.connections import RedisSettings
+from arq.jobs import Job
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from database import init_db, get_db, Receipt
 
-# ---- SETUP ----
-API_KEY = os.environ.get("GEMINI_API_KEY")
-if not API_KEY:
-    raise RuntimeError("Set the GEMINI_API_KEY environment variable first.")
-
-genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
-
-PROMPT = """
-You are a receipt-parsing engine. Look at this image.
-
-First, decide: is this actually a photo of a receipt or invoice?
-
-If it is NOT a receipt or invoice (e.g. it's a random photo, a document,
-a screenshot, anything else), respond with ONLY this JSON:
-{"is_receipt": false, "reason": "brief explanation of what the image actually shows"}
-
-If it IS a receipt or invoice, respond with ONLY valid JSON, no explanation,
-no markdown fences, no extra text, using exactly this schema:
-
-{
-  "is_receipt": true,
-  "vendor": string,
-  "date": string (format YYYY-MM-DD, or null if not visible),
-  "total_amount": number,
-  "currency": string (3-letter code if you can tell, else best guess),
-  "category": string (one of: food, transport, utilities, shopping, health, other),
-  "line_items": [
-    {"description": string, "amount": number}
-  ],
-  "confidence": string (one of: high, medium, low -- based on image clarity)
-}
-
-If a field is not visible or unclear, use null. Do not invent data that isn't
-on the receipt. If the image is blurry or partially unreadable, still extract
-what you can, set confidence to "low" or "medium", and use null for anything
-you genuinely cannot read.
-"""
+MAX_FILE_SIZE_MB = 10
 
 app = FastAPI(
     title="SnapLedger API",
     description="Upload a receipt image, get back structured spending data.",
-    version="0.1.0",
+    version="0.3.0",
 )
 
 
-def extract_receipt_from_bytes(image_bytes: bytes, mime_type: str) -> dict:
-    """Send image bytes to Gemini and return parsed structured data."""
-    response = model.generate_content(
-        [
-            PROMPT,
-            {"mime_type": mime_type, "data": image_bytes},
-        ]
-    )
+@app.on_event("startup")
+async def on_startup():
+    """Create database tables and connect to Redis when the app starts."""
+    init_db()
+    app.state.redis = await create_pool(RedisSettings(host="localhost", port=6379))
 
-    raw_text = response.text.strip()
 
-    # Defensive cleanup: Gemini sometimes wraps JSON in ```json fences anyway
-    if raw_text.startswith("```"):
-        raw_text = raw_text.strip("`")
-        raw_text = raw_text.replace("json\n", "", 1).strip()
-
-    return json.loads(raw_text)
+@app.on_event("shutdown")
+async def on_shutdown():
+    await app.state.redis.close()
 
 
 @app.get("/")
@@ -87,18 +46,13 @@ def root():
     return {"status": "ok", "message": "SnapLedger API is running"}
 
 
-MAX_FILE_SIZE_MB = 10
-
-
 @app.post("/extract")
 async def extract(file: UploadFile = File(...)):
     """
-    Upload a receipt image (jpg/png). Returns structured extraction:
-    vendor, date, total amount, currency, category, and line items.
-
-    If the image isn't a receipt, returns a 422 explaining what was detected instead.
+    Upload a receipt image (jpg/png). Queues a background extraction job
+    and returns immediately with a job_id -- check GET /jobs/{job_id}
+    to see the result once processing finishes.
     """
-    # Basic validation: only accept image files
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=422,
@@ -117,28 +71,41 @@ async def extract(file: UploadFile = File(...)):
             detail=f"File too large ({size_mb:.1f}MB). Max size is {MAX_FILE_SIZE_MB}MB.",
         )
 
-    # Try extraction once, retry once on bad JSON (models occasionally glitch)
-    result = None
-    last_error = None
-    for attempt in range(2):
-        try:
-            result = extract_receipt_from_bytes(image_bytes, file.content_type)
-            break
-        except json.JSONDecodeError as e:
-            last_error = e
-            continue
+    # Hand off to the background worker -- returns instantly, doesn't wait for Gemini
+    job = await app.state.redis.enqueue_job(
+        "extract_receipt_task", image_bytes, file.content_type
+    )
 
-    if result is None:
-        raise HTTPException(
-            status_code=502,
-            detail="Model did not return valid JSON after retry. Try a clearer image.",
-        )
+    return {"job_id": job.job_id, "status": "queued"}
 
-    # Handle the "this isn't a receipt" case cleanly
-    if result.get("is_receipt") is False:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Image does not appear to be a receipt. {result.get('reason', '')}",
-        )
 
-    return result
+@app.get("/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """Check the status of a background extraction job. Poll this until status is 'complete'."""
+    job = Job(job_id, app.state.redis)
+    status = await job.status()
+
+    if status == "not_found":
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+
+    if status == "complete":
+        result = await job.result()
+        return {"status": "complete", "result": result}
+
+    return {"status": str(status)}
+
+
+@app.get("/receipts")
+def list_receipts(db: Session = Depends(get_db)):
+    """Return all saved receipts, most recent first."""
+    receipts = db.query(Receipt).order_by(Receipt.created_at.desc()).all()
+    return receipts
+
+
+@app.get("/receipts/{receipt_id}")
+def get_receipt(receipt_id: int, db: Session = Depends(get_db)):
+    """Return a single saved receipt by its ID."""
+    receipt = db.query(Receipt).filter(Receipt.id == receipt_id).first()
+    if receipt is None:
+        raise HTTPException(status_code=404, detail=f"Receipt {receipt_id} not found.")
+    return receipt
