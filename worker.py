@@ -108,4 +108,6 @@ async def extract_receipt_task(ctx, image_bytes: bytes, mime_type: str) -> dict:
 class WorkerSettings:
     """arq reads this class to know what functions it can run and how to connect to Redis."""
     functions = [extract_receipt_task]
-    redis_settings = RedisSettings(host="localhost", port=6379)
+    redis_settings = RedisSettings(
+        host=os.environ.get("REDIS_HOST", "localhost"), port=6379
+    )

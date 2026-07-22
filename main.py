@@ -11,6 +11,7 @@ Run the worker in a SEPARATE terminal:
 Then open http://127.0.0.1:8000/docs to try it.
 """
 
+import os
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 from arq import create_pool
@@ -32,7 +33,9 @@ app = FastAPI(
 async def on_startup():
     """Create database tables and connect to Redis when the app starts."""
     init_db()
-    app.state.redis = await create_pool(RedisSettings(host="localhost", port=6379))
+    app.state.redis = await create_pool(
+        RedisSettings(host=os.environ.get("REDIS_HOST", "localhost"), port=6379)
+    )
 
 
 @app.on_event("shutdown")

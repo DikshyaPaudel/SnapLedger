@@ -22,7 +22,6 @@ A running record of what was built, why, and what was learned — kept so it can
 - Response time was ~22 seconds for a single image, which isn't acceptable for a real-time API — this is why the next phase of the project moves extraction into a background job queue (Celery/arq) so the API can respond instantly with a job ID while processing happens asynchronously.
 - Categorization (e.g., "shopping" vs "food") is a judgment call the LLM makes, not a hard fact like the total amount — worth refining later with more specific prompting or per-item categorization.
 
-**Interview-ready one-liner:** "I built a receipt intelligence API that uses an LLM's vision capability to extract structured financial data from receipt photos, since it handles varied formats better than traditional OCR-plus-rules approaches — and I designed it with async processing from the start because LLM calls are too slow to block a real API response."
 
 ---
 
@@ -46,7 +45,6 @@ A running record of what was built, why, and what was learned — kept so it can
 - The endpoint still runs synchronously — the client waits the full ~20+ seconds for the LLM response. This is the exact problem Week 2's background job queue (Celery/arq) is designed to solve.
 - Need to test what happens with a corrupted or non-receipt image (e.g. a random photo) to see how the model behaves versus a bad file type.
 
-**Interview-ready one-liner:** "I turned the extraction logic into a real FastAPI service with proper input validation, so invalid uploads fail gracefully with clear error messages instead of crashing — and FastAPI's automatic OpenAPI docs meant anyone integrating with the API has live, always-accurate documentation without me writing a separate doc page."
 
 ---
 
@@ -72,7 +70,60 @@ A running record of what was built, why, and what was learned — kept so it can
 - This detection relies on the LLM's judgment, not a hard rule — it's a probabilistic safeguard, not a guarantee. Documented as a known limitation rather than treated as a solved problem.
 - Next: move this synchronous, ~20-second call into a background job so the API responds instantly (Week 2 priority).
 
-**Interview-ready one-liner:** "I noticed the model would confidently hallucinate fake data when given a non-receipt image, which is a serious problem for a financial tool — so I extended the prompt to have the model reason about whether the image even is a receipt first, turning a silent wrong-answer risk into a clear, explained rejection instead."
 
 ---
 
+## Day 6 — Background Job Processing with arq + Redis
+
+**What I built:** Split the extraction logic into two separate processes: the FastAPI app (`main.py`) now only handles HTTP requests, and a new background worker (`worker.py`) does the actual slow Gemini call. Redis sits between them as the message queue. `/extract` now returns instantly with a `job_id` instead of making the client wait ~20 seconds, and a new `GET /jobs/{job_id}` endpoint lets the client check when processing is done.
+
+**Why this approach:** The synchronous version worked, but made every client wait the full LLM response time before getting anything back — unacceptable for a real API, especially if multiple people upload receipts at once. This is a standard pattern in production systems for any slow operation (video processing, large file exports, AI inference): respond immediately, do the real work in the background, let the client poll for completion.
+
+**How it works:**
+1. `POST /extract` validates the upload, then calls `enqueue_job()`, which writes a job request into Redis and returns instantly with a unique `job_id`
+2. A separate always-running worker process (`arq worker.WorkerSettings`) constantly watches Redis for new jobs
+3. When it picks one up, it runs `extract_receipt_task()` — the same Gemini call and JSON cleanup logic from before, now living in the worker — and saves the result to the database using its own independent database session
+4. The client calls `GET /jobs/{job_id}` to check status (`queued` → `in_progress` → `complete`), and once complete, retrieves the actual extracted data
+
+**What I validated:**
+- Confirmed Redis was installed and running (`redis-cli ping` → `PONG`)
+- Ran the API and worker as two separate terminal processes simultaneously
+- [To fill in once tested: confirmed `/extract` returns a job_id instantly, and `/jobs/{job_id}` transitions from pending to complete with the correct extracted data, while the worker terminal visibly logs the job being picked up and processed]
+
+**What I noted for later:**
+- This pattern (instant response + job ID + polling) is invisible to a real end user — a real frontend would poll automatically in the background via JavaScript, not require anyone to manually copy a job ID. The manual copying is only because `/docs` (Swagger UI) is a raw developer testing tool, not a real user interface.
+- Still using SQLite, not Postgres yet — planned swap during Dockerization (Day 9-10), since the `database.py` structure makes that a small, isolated change.
+- Learned a practical gotcha: environment variables set with `export` only apply to the terminal session they were run in — needing two terminals running simultaneously (API + worker) means the API key has to be exported in both, or better, loaded from a `.env` file via `python-dotenv`.
+
+## Day 8 — Automated Testing with pytest
+
+What I built: A test suite (test_main.py) covering the API's core endpoints: health check, file upload validation (rejecting non-images, empty files, oversized files), job queuing, receipt retrieval, and 404 handling for missing resources. 8 tests total, all passing.
+
+Why this approach: As the project grows (Postgres, Docker, new features), it becomes easy to accidentally break existing functionality while adding something new. Automated tests act as a safety net — running pytest after any change immediately confirms whether existing behavior still works, instead of manually re-clicking through Swagger UI every time, which doesn't scale and gets skipped under time pressure (exactly when bugs slip through). Tests are also one of the clearest signals of production-readiness in an interview, since untested code is hard for a team to trust or build on.
+
+## How it works:
+
+
+Used FastAPI's TestClient to call endpoints directly in Python, simulating real HTTP requests without needing a running server
+Used unittest.mock to fake out the Redis connection for the job-queuing test, so the test suite runs fast and doesn't spend real Gemini API credits or require Redis to be running every time tests execute
+Tested both "happy path" behavior (valid uploads succeed) and failure cases (invalid file types, empty files, oversized files, non-existent IDs) — failure-case coverage is what separates thorough tests from superficial ones
+
+
+## What I validated:
+
+
+Initial run: 7 passed, 1 failed
+The failure (AttributeError: 'State' object has no attribute 'redis') was a real bug in the test setup, not the app: FastAPI's startup event (which connects to Redis) only fires when TestClient is used as a context manager (with TestClient(app) as c:). The original test file created the client without that context manager, so the startup event never ran and app.state.redis was never initialized.
+Fixed with an autouse=True pytest fixture that wraps client creation in the required with block, ensuring startup/shutdown events fire before every test
+Final result: all 8 tests passing
+
+
+## What I noted for later:
+
+
+Noticed a DeprecationWarning: FastAPI's @app.on_event("startup"/"shutdown") pattern is deprecated in favor of "lifespan handlers." Not urgent — logged as a small polish item for Week 3 cleanup, not worth context-switching for mid-testing.
+Mocking external services (Redis, and eventually Gemini) rather than calling them for real in tests is a deliberate choice: tests should verify my code's logic, not re-test third-party services I already trust to work.
+
+
+Interview-ready one-liner: "I wrote a pytest suite covering both success and failure paths, and hit a real bug in my own test setup along the way — FastAPI's startup events don't fire with TestClient unless you use it as a context manager, which is a subtle but common gotcha. Debugging that taught me more about FastAPI's lifecycle than the passing tests did."
+---

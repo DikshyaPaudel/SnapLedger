@@ -6,14 +6,19 @@ Using SQLite for now (single file, zero setup) -- swapping to Postgres
 later just means changing DATABASE_URL, nothing else in this file changes.
 """
 
+import os
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-DATABASE_URL = "sqlite:///./snapledger.db"
+# Reads from environment variable so the same code works locally and in Docker.
+# Falls back to a local Postgres instance if not set.
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://snapledger:snapledger@localhost:5432/snapledger",
+)
 
-# check_same_thread=False is needed for SQLite specifically when used with FastAPI
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
