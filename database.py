@@ -36,6 +36,7 @@ class Receipt(Base):
     category = Column(String, nullable=True)
     confidence = Column(String, nullable=True)
     line_items = Column(JSON, nullable=True)  # stores the list of {description, amount} as JSON
+    document_type = Column(String, nullable=True, default="receipt")  # receipt | sales_invoice | purchase_invoice
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
