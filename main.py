@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Optional, List
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -282,3 +283,9 @@ def get_summary(db: Session = Depends(get_db)):
             for category, data in normalized_totals.items()
         ],
     }
+
+
+# Serves the frontend (index.html + assets) at /app, straight from FastAPI.
+# Mounted at "/app" rather than "/" so it never collides with the API routes
+# above -- e.g. GET /app returns the page, GET /receipts still hits the API.
+app.mount("/app", StaticFiles(directory="static", html=True), name="static")

@@ -142,6 +142,11 @@
     border-color: var(--ink);
     color: var(--paper);
   }
+  .upload-zone {
+    display: block;
+    position: relative;
+    width: 100%;
+}
 
   .upload-zone {
     background: white;
@@ -170,6 +175,8 @@
     font-size: 28px;
     margin-bottom: 12px;
     display: block;
+    width: 100%;
+    line-height: 1;
   }
 
   .upload-label {
@@ -185,8 +192,35 @@
     letter-spacing: 0.03em;
   }
 
-  #preview-wrap { margin-top: 18px; text-align: center; display: none; }
-  #preview { max-width: 160px; max-height: 160px; border: 1px solid var(--line); border-radius: 2px; }
+  #preview-wrap {
+    margin-top: 0;
+    text-align: center;
+    display: none;
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 24px;
+    box-shadow: 0 6px 16px rgba(30,37,48,0.06);
+  }
+
+  #preview {
+    max-width: 180px;
+    max-height: 180px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    display: block;
+    margin: 0 auto;
+  }
+
+  .change-file-link {
+    display: inline-block;
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--olive);
+    cursor: pointer;
+    text-decoration: underline;
+    letter-spacing: 0.03em;
+  }
 
   .preview-frame { position: relative; display: inline-block; }
 
@@ -536,13 +570,15 @@
     background: var(--paper-dark);
     color: var(--ink-soft);
     flex-shrink: 0;
+    width: 68px;
+    text-align: center;
   }
 
   .ledger-row .lr-type.sales_invoice { background: #E7ECE1; color: var(--olive); }
   .ledger-row .lr-type.purchase_invoice { background: #F2E1DF; color: var(--stamp); }
 
   .ledger-row .lr-vendor {
-    flex: 1;
+    flex: 1.2;
     color: var(--ink);
     white-space: nowrap;
     overflow: hidden;
@@ -561,6 +597,23 @@
     min-width: 64px;
     text-align: right;
   }
+
+  .ledger-columns {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 4px 8px;
+    border-bottom: 1px solid var(--ink);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+
+  .ledger-columns .lc-type { flex-shrink: 0; width: 68px; text-align: center; }
+  .ledger-columns .lc-vendor { flex: 1.2; }
+  .ledger-columns .lc-date { flex-shrink: 0; width: 74px; }
+  .ledger-columns .lc-amount { flex-shrink: 0; min-width: 64px; text-align: right; }
 
   .ledger-empty {
     text-align: center;
@@ -601,12 +654,12 @@
 
   <div class="doctype-row" id="doctype-row">
     <button type="button" class="doctype-btn active" data-type="receipt">Receipt</button>
-    <button type="button" class="doctype-btn" data-type="sales_invoice">Sales Invoice</button>
-    <button type="button" class="doctype-btn" data-type="purchase_invoice">Purchase Invoice</button>
+    <!-- <button type="button" class="doctype-btn" data-type="sales_invoice">Sales Invoice</button>
+    <button type="button" class="doctype-btn" data-type="purchase_invoice">Purchase Invoice</button> -->
   </div>
 
   <label class="upload-zone" id="drop-zone">
-    <span class="upload-icon">🧾</span>
+    <span class="upload-icon">⬆️</span>
     <span class="upload-label">Drop a document, or click to upload</span>
     <span class="upload-hint">JPG OR PNG · READ BY GEMINI VISION</span>
     <input type="file" id="file-input" accept="image/*">
@@ -616,6 +669,7 @@
     <div class="preview-frame" id="preview-frame">
       <img id="preview" alt="Document preview">
     </div>
+    <span class="change-file-link" id="change-file-link">Choose a different file</span>
   </div>
 
   <div class="status-line" id="status-line"></div>
@@ -626,8 +680,14 @@
 
   <section class="ledger-section">
     <div class="ledger-header">
-      <span class="ledger-title">The Ledger</span>
+      <span class="ledger-title">Saved Documents</span>
       <span class="ledger-count" id="ledger-count"></span>
+    </div>
+    <div class="ledger-columns">
+      <span class="lc-type">Type</span>
+      <span class="lc-vendor">Vendor</span>
+      <span class="lc-date">Date</span>
+      <span class="lc-amount">Amount</span>
     </div>
     <div id="ledger-list" class="ledger-list"></div>
   </section>
@@ -636,12 +696,15 @@
 </div>
 
 <script>
-  const API_BASE = "http://127.0.0.1:8000";
+  // When served by FastAPI (from /app), the page and API share an origin --
+  // use relative paths, no CORS needed. If opened directly as a local file
+  // (file://), fall back to the explicit local API address.
+  const API_BASE = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
 
   const DOCTYPE_LABELS = {
     receipt: 'Receipt',
-    sales_invoice: 'Sales Invoice',
-    purchase_invoice: 'Purchase Invoice',
+    sales_invoice: 'Sales Inv.',
+    purchase_invoice: 'Purch. Inv.',
   };
 
   let selectedDocType = 'receipt';
@@ -651,6 +714,7 @@
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
   const previewWrap = document.getElementById('preview-wrap');
+  const changeFileLink = document.getElementById('change-file-link');
   const previewFrame = document.getElementById('preview-frame');
   const preview = document.getElementById('preview');
   const statusLine = document.getElementById('status-line');
@@ -677,16 +741,18 @@
     }
   }
 
-  function renderLedger(receipts) {
-    ledgerCount.textContent = receipts.length ? `${receipts.length} entr${receipts.length === 1 ? 'y' : 'ies'}` : '';
+  function renderLedger(allEntries) {
+    // Shows every saved document type -- receipts, sales invoices, purchase
+    // invoices -- side by side, with the Type column distinguishing them.
+    ledgerCount.textContent = allEntries.length ? `${allEntries.length} item${allEntries.length === 1 ? '' : 's'}` : '';
 
-    if (!receipts.length) {
+    if (!allEntries.length) {
       ledgerList.innerHTML = `<div class="ledger-empty">Nothing saved yet — confirm an upload to see it here.</div>`;
       return;
     }
 
     // newest first
-    const sorted = [...receipts].sort((a, b) => (b.id || 0) - (a.id || 0));
+    const sorted = [...allEntries].sort((a, b) => (b.id || 0) - (a.id || 0));
 
     ledgerList.innerHTML = sorted.map((r, i) => `
       <div class="ledger-row" style="animation-delay:${Math.min(i, 8) * 0.04}s">
@@ -699,6 +765,14 @@
   }
 
   fetchLedger();
+
+  changeFileLink.addEventListener('click', () => {
+    resetCards();
+    previewWrap.style.display = 'none';
+    dropZone.style.display = 'block';
+    fileInput.value = '';
+    setStatus('', false);
+  });
 
   fileInput.addEventListener('change', (e) => {
     if (e.target.files[0]) handleFile(e.target.files[0]);
@@ -721,6 +795,7 @@
     reader.onload = (e) => {
       preview.src = e.target.result;
       previewWrap.style.display = 'block';
+      dropZone.style.display = 'none';
     };
     reader.readAsDataURL(file);
 
@@ -873,6 +948,9 @@
 
     document.getElementById('discard-btn').addEventListener('click', () => {
       resetCards();
+      previewWrap.style.display = 'none';
+      dropZone.style.display = 'block';
+      fileInput.value = '';
       setStatus('Discarded. Upload another to try again.', false);
     });
 
@@ -987,6 +1065,8 @@
     document.getElementById('new-upload-link').addEventListener('click', () => {
       resetCards();
       previewWrap.style.display = 'none';
+      dropZone.style.display = 'block';
+      fileInput.value = '';
       setStatus('', false);
     });
   }

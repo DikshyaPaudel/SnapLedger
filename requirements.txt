@@ -7,3 +7,4 @@ psycopg2-binary
 arq
 pytest
 httpx2
+jinja2

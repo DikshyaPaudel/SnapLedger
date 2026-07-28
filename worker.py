@@ -12,9 +12,8 @@ Run this worker in a SEPARATE terminal from your FastAPI server:
 import os
 import json
 import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
 from arq.connections import RedisSettings
-
-from database import SessionLocal, Receipt
 
 # ---- SETUP (same as main.py) ----
 API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -68,11 +67,21 @@ async def extract_receipt_task(ctx, image_bytes: bytes, mime_type: str) -> dict:
     """
     The actual background job. arq calls this with the image data,
     runs the slow Gemini call here (away from the API's request/response cycle),
-    saves the result to the database, and returns the final structured data.
+    and returns the structured data for the user to review.
     """
-    response = model.generate_content(
-        [PROMPT, {"mime_type": mime_type, "data": image_bytes}]
-    )
+    try:
+        response = model.generate_content(
+            [PROMPT, {"mime_type": mime_type, "data": image_bytes}]
+        )
+    except google_exceptions.ResourceExhausted:
+        # Free-tier quota hit (20 requests/day for gemini-2.5-flash). Return a
+        # plain dict -- the raw exception object isn't picklable by arq, which
+        # would otherwise turn this into a confusing secondary serialization error.
+        return {"error": "Gemini API quota exceeded for today. Try again later, or check your plan at https://ai.google.dev/gemini-api/docs/rate-limits."}
+    except Exception as e:
+        # Catch-all for other API-side failures (network issues, model errors, etc.)
+        # so a raw, potentially unpicklable exception never reaches arq's result serializer.
+        return {"error": f"Extraction failed: {str(e)}"}
 
     result = None
     try:
@@ -83,25 +92,9 @@ async def extract_receipt_task(ctx, image_bytes: bytes, mime_type: str) -> dict:
     if result.get("is_receipt") is False:
         return {"error": f"Not a receipt: {result.get('reason', '')}"}
 
-    # Save to database -- worker uses its own session, separate from the API's
-    db = SessionLocal()
-    try:
-        receipt = Receipt(
-            vendor=result.get("vendor"),
-            date=result.get("date"),
-            total_amount=result.get("total_amount"),
-            currency=result.get("currency"),
-            category=result.get("category"),
-            confidence=result.get("confidence"),
-            line_items=result.get("line_items"),
-        )
-        db.add(receipt)
-        db.commit()
-        db.refresh(receipt)
-        result["id"] = receipt.id
-    finally:
-        db.close()
-
+    # NOTE: nothing is saved to the database here anymore. Extraction just
+    # returns the structured data so the user can review/correct it first --
+    # actual storage happens via POST /receipts once they confirm (see main.py).
     return result
 
 

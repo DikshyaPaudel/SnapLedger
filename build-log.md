@@ -183,3 +183,63 @@ A running record of what was built, why, and what was learned — kept so it can
 
 ---
 
+## Day 12 — Review-Before-Save Architecture + Spending Summary
+
+**What I built:** Reworked the core data flow so extraction and storage are two separate steps, with a human review checkpoint in between. Added `POST /receipts` as the only place a record actually gets written, and `GET /summary` for a quick spending overview (total spent, receipt count, breakdown by category).
+
+**Why this approach:** Every earlier version saved straight to the database the moment Gemini finished extracting. That's fine for a demo, but it's the wrong pattern for anything touching financial data — an LLM's read of a blurry photo can be wrong, and writing that straight into a ledger with zero human checkpoint means mistakes go in silently. So `worker.py` no longer touches the database at all; it just returns what it read. `POST /receipts` is the sole write path, and it's called with whatever the user actually confirmed — which may differ from the model's first guess.
+
+For `/summary`, category values come from the LLM (see Day 3/6), not from rule-based logic — so the endpoint normalizes anything outside the known category set into `"other"` before aggregating, rather than trusting the model's output blindly even for a low-stakes field.
+
+**How it works:**
+1. `POST /extract` → background job → returns structured data, nothing saved
+2. Frontend renders an editable review form pre-filled with the model's answers
+3. User corrects anything wrong, hits Confirm
+4. `POST /receipts` validates and writes the (possibly corrected) data
+5. `GET /summary` aggregates `SUM(total_amount)` and `COUNT(*)` grouped by category, via SQLAlchemy's `func.sum`/`func.count`
+
+**What I validated:**
+- Confirmed extraction no longer creates a database row on its own — only `POST /receipts` does
+- Tested `/summary` with several saved receipts across different categories, confirmed totals matched manual addition
+- Tested an edge case: a category value outside the known set folds into `"other"` instead of appearing as a stray row
+
+**What I noted for later:** This is a good "I didn't just wire up an API call" story for interviews — the review step exists specifically because I understood that LLM output touching financial records needs a human checkpoint, not because a tutorial told me to add one.
+
+**Interview-ready one-liner:** "I deliberately separated extraction from storage — the model proposes structured data, but nothing gets written to the database until a human confirms it. That's not a UX nicety, it's the right pattern for any system where an AI's mistake would otherwise land silently in a financial record."
+
+---
+
+## Day 12b — Document Type: Why It's Manual, Not LLM-Guessed
+
+**What I built:** A `document_type` field (Receipt / Sales Invoice / Purchase Invoice) on every saved record, chosen explicitly by the user rather than inferred by the model.
+
+**Why this approach:** This came out of directly comparing it to `category`, which *is* LLM-judged. The difference is stakes: getting `category` wrong means a grocery receipt sits under "shopping" instead of "food" — cosmetic. Getting `document_type` wrong means a transaction is recorded on the wrong side of the ledger entirely — Sales Invoices are revenue, Purchase Invoices are expenses, and conflating them corrupts financial reporting, not just organization. I considered having the LLM guess document type (the way it already guesses category) and pre-selecting the toggle, letting the user override — and deliberately rejected it. The higher the financial consequence of a field being wrong, the less appropriate it is to let a probabilistic model decide it unsupervised.
+
+**What I noted for later:** In a real ERP-embedded version of this (rather than a standalone demo), this wouldn't be a manual toggle at all — it'd be inferred from *context* (which page/module the upload happens on), not from either the user picking it or the LLM guessing it. The current toggle is a reasonable stand-in specifically because this is a single-page standalone demo without separate contextual pages to embed into.
+
+**Interview-ready one-liner:** "I use the LLM to classify low-stakes fields like spending category, but kept document type — which determines whether a transaction is revenue or expense — as mandatory human input. The rule I used: the more financially consequential a field is, the less it belongs to a probabilistic model without confirmation."
+
+---
+
+## Day 13 — Frontend Build: Upload, Review, and a Live Saved-Documents List
+
+**What I built:** A full frontend (`static/index.html`) — document type selection, drag-and-drop upload with a live scan animation during extraction, an editable review card with confidence-level framing, and a "Saved Documents" table that updates immediately after every save.
+
+**Why this approach:** The review step (Day 12) needed a real UI to be meaningful — a backend endpoint that supports correction is pointless if nothing in the product actually shows the user what to correct. Confidence level is surfaced directly in the review screen's copy and color (green for high confidence, red for low), so a shaky extraction is visually flagged before the user even reads the fields, not buried in a generic form.
+
+**How it works:**
+- Upload → `POST /extract`, then polls `GET /jobs/{id}` every 1.5s until complete
+- On completion, renders editable fields for every extracted value, plus line items (add/remove/edit)
+- Confirm → `POST /receipts`, then immediately re-fetches `GET /receipts` to refresh the saved-documents list — no page reload needed
+- Frontend is served directly by FastAPI at `/app` via `StaticFiles`, so the API and frontend share an origin (no CORS dependency for normal use, though CORS middleware stays enabled as a fallback for standalone use)
+
+**What I validated:**
+- Full loop tested end-to-end: upload → review → intentionally edit a field to confirm the correction actually persists → confirm → see it appear in the saved list
+- Tested the low-confidence path specifically (blurry image) to confirm the red warning state renders correctly
+- Confirmed `GET /extract`'s quota-exceeded errors (hit Gemini's free-tier 20/day cap during testing) surface as a clean readable message in the UI instead of a raw 500, after wrapping the Gemini call in `worker.py` with explicit exception handling
+
+**What I noted for later:** Hit Gemini's free-tier quota mid-testing, which exposed a real bug — the raw `ResourceExhausted` exception isn't picklable, so `arq` failed a second time trying to serialize it as the job result. Fixed by catching API errors in the worker and always returning a plain, serializable dict. Good lesson: even "just show the error to the user" needs to account for whether the error object itself can survive the serialization boundary it's crossing.
+
+**Interview-ready one-liner:** "Building the frontend surfaced a real backend bug — an uncaught API exception that wasn't picklable, which crashed the job serialization layer on top of the original error. Fixing it taught me to think about error handling across process boundaries, not just within a single function."
+
+---
