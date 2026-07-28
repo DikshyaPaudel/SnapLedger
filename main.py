@@ -12,9 +12,10 @@ Then open http://127.0.0.1:8000/docs to try it.
 """
 
 import os
+import uuid
 from datetime import datetime
 from typing import Optional, List
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -25,9 +26,26 @@ from arq.connections import RedisSettings
 from arq.jobs import Job
 
 from database import init_db, get_db, Receipt
+from extraction import run_extraction
 
 MAX_FILE_SIZE_MB = 10
 ALLOWED_DOCUMENT_TYPES = {"receipt", "sales_invoice", "purchase_invoice"}
+
+# Which job backend to use for background extraction:
+# - "redis" (default): the "real" architecture -- a separate arq worker
+#   process, connected via Redis. Used locally and in Docker.
+# - "inline": no Redis/worker service required -- extraction runs via
+#   FastAPI's BackgroundTasks in the same process, with an in-memory dict
+#   standing in for the job store. Used for the free-tier deployed demo,
+#   where provisioning a separate paid worker + Redis isn't justified for
+#   a low-traffic portfolio project. Same non-blocking pattern (the request
+#   still returns instantly), just without a second process.
+JOB_BACKEND = os.environ.get("JOB_BACKEND", "redis")
+
+# Only used in "inline" mode. Lives in memory, so it resets on restart/redeploy
+# (acceptable for a demo; a real always-on deployment would still use Redis/a
+# real queue instead of this).
+inline_jobs: dict = {}
 
 
 class LineItem(BaseModel):
@@ -69,26 +87,36 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def on_startup():
-    """Create database tables and connect to Redis when the app starts."""
+    """Create database tables and, in 'redis' mode, connect to Redis."""
     init_db()
-    app.state.redis = await create_pool(
-        RedisSettings(host=os.environ.get("REDIS_HOST", "localhost"), port=6379)
-    )
+    if JOB_BACKEND == "redis":
+        app.state.redis = await create_pool(
+            RedisSettings(host=os.environ.get("REDIS_HOST", "localhost"), port=6379)
+        )
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    await app.state.redis.close()
+    if JOB_BACKEND == "redis":
+        await app.state.redis.close()
 
 
 @app.get("/")
 def root():
     """Simple health check -- confirms the API is alive."""
-    return {"status": "ok", "message": "SnapLedger API is running"}
+    return {"status": "ok", "message": "SnapLedger API is running", "job_backend": JOB_BACKEND}
+
+
+def _run_inline_job(job_id: str, image_bytes: bytes, mime_type: str):
+    """Runs in the background (inline mode only) -- same extraction logic as
+    the arq worker uses, just dispatched via FastAPI's BackgroundTasks instead
+    of a separate process."""
+    result = run_extraction(image_bytes, mime_type)
+    inline_jobs[job_id] = {"status": "complete", "result": result}
 
 
 @app.post("/extract")
-async def extract(file: UploadFile = File(...)):
+async def extract(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     """
     Upload a receipt image (jpg/png). Queues a background extraction job
     and returns immediately with a job_id -- check GET /jobs/{job_id}
@@ -112,28 +140,42 @@ async def extract(file: UploadFile = File(...)):
             detail=f"File too large ({size_mb:.1f}MB). Max size is {MAX_FILE_SIZE_MB}MB.",
         )
 
-    # Hand off to the background worker -- returns instantly, doesn't wait for Gemini
-    job = await app.state.redis.enqueue_job(
-        "extract_receipt_task", image_bytes, file.content_type
-    )
+    if JOB_BACKEND == "redis":
+        # Hand off to the background worker -- returns instantly, doesn't wait for Gemini
+        job = await app.state.redis.enqueue_job(
+            "extract_receipt_task", image_bytes, file.content_type
+        )
+        return {"job_id": job.job_id, "status": "queued"}
 
-    return {"job_id": job.job_id, "status": "queued"}
+    # inline mode: no separate worker/Redis -- FastAPI runs this after the
+    # response is sent, same "returns instantly" behavior for the client
+    job_id = str(uuid.uuid4())
+    inline_jobs[job_id] = {"status": "in_progress", "result": None}
+    background_tasks.add_task(_run_inline_job, job_id, image_bytes, file.content_type)
+    return {"job_id": job_id, "status": "queued"}
 
 
 @app.get("/jobs/{job_id}")
 async def get_job_status(job_id: str):
     """Check the status of a background extraction job. Poll this until status is 'complete'."""
-    job = Job(job_id, app.state.redis)
-    status = await job.status()
+    if JOB_BACKEND == "redis":
+        job = Job(job_id, app.state.redis)
+        status = await job.status()
 
-    if status == "not_found":
+        if status == "not_found":
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+
+        if status == "complete":
+            result = await job.result()
+            return {"status": "complete", "result": result}
+
+        return {"status": str(status)}
+
+    # inline mode
+    job = inline_jobs.get(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
-
-    if status == "complete":
-        result = await job.result()
-        return {"status": "complete", "result": result}
-
-    return {"status": str(status)}
+    return job
 
 
 @app.post("/receipts")
