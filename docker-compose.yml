@@ -1,0 +1,60 @@
+services:
+  # PostgreSQL database
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: snapledger
+      POSTGRES_PASSWORD: snapledger
+      POSTGRES_DB: snapledger
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U snapledger"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis (job queue)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI app
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://snapledger:snapledger@db:5432/snapledger
+      REDIS_HOST: redis
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Background worker (same code, different command)
+  worker:
+    build: .
+    command: ["arq", "worker.WorkerSettings"]
+    environment:
+      DATABASE_URL: postgresql://snapledger:snapledger@db:5432/snapledger
+      REDIS_HOST: redis
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

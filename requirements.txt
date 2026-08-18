@@ -2,3 +2,9 @@ google-generativeai
 fastapi
 uvicorn[standard]
 python-multipart
+sqlalchemy
+psycopg2-binary
+arq
+pytest
+httpx2
+jinja2

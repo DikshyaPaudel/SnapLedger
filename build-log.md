@@ -76,3 +76,170 @@ A running record of what was built, why, and what was learned — kept so it can
 
 ---
 
+## Day 6 — Background Job Processing with arq + Redis
+
+**What I built:** Split the extraction logic into two separate processes: the FastAPI app (`main.py`) now only handles HTTP requests, and a new background worker (`worker.py`) does the actual slow Gemini call. Redis sits between them as the message queue. `/extract` now returns instantly with a `job_id` instead of making the client wait ~20 seconds, and a new `GET /jobs/{job_id}` endpoint lets the client check when processing is done.
+
+**Why this approach:** The synchronous version worked, but made every client wait the full LLM response time before getting anything back — unacceptable for a real API, especially if multiple people upload receipts at once. This is a standard pattern in production systems for any slow operation (video processing, large file exports, AI inference): respond immediately, do the real work in the background, let the client poll for completion.
+
+**How it works:**
+1. `POST /extract` validates the upload, then calls `enqueue_job()`, which writes a job request into Redis and returns instantly with a unique `job_id`
+2. A separate always-running worker process (`arq worker.WorkerSettings`) constantly watches Redis for new jobs
+3. When it picks one up, it runs `extract_receipt_task()` — the same Gemini call and JSON cleanup logic from before, now living in the worker — and saves the result to the database using its own independent database session
+4. The client calls `GET /jobs/{job_id}` to check status (`queued` → `in_progress` → `complete`), and once complete, retrieves the actual extracted data
+
+**What I validated:**
+- Confirmed Redis was installed and running (`redis-cli ping` → `PONG`)
+- Ran the API and worker as two separate terminal processes simultaneously
+- [To fill in once tested: confirmed `/extract` returns a job_id instantly, and `/jobs/{job_id}` transitions from pending to complete with the correct extracted data, while the worker terminal visibly logs the job being picked up and processed]
+
+**What I noted for later:**
+- This pattern (instant response + job ID + polling) is invisible to a real end user — a real frontend would poll automatically in the background via JavaScript, not require anyone to manually copy a job ID. The manual copying is only because `/docs` (Swagger UI) is a raw developer testing tool, not a real user interface.
+- Still using SQLite, not Postgres yet — planned swap during Dockerization (Day 9-10), since the `database.py` structure makes that a small, isolated change.
+- Learned a practical gotcha: environment variables set with `export` only apply to the terminal session they were run in — needing two terminals running simultaneously (API + worker) means the API key has to be exported in both, or better, loaded from a `.env` file via `python-dotenv`.
+
+**Interview-ready one-liner:** "I moved LLM extraction out of the request/response cycle entirely, using Redis and arq as a job queue — the API now responds in milliseconds with a job ID while a separate worker process handles the actual ~20-second AI call, which is the same async pattern production systems use for any slow operation like video processing or report generation."
+
+---
+
+## Day 8 — Automated Testing with pytest
+
+**What I built:** A test suite (`test_main.py`) covering the API's core endpoints: health check, file upload validation (rejecting non-images, empty files, oversized files), job queuing, receipt retrieval, and 404 handling for missing resources. 8 tests total, all passing.
+
+**Why this approach:** As the project grows (Postgres, Docker, new features), it becomes easy to accidentally break existing functionality while adding something new. Automated tests act as a safety net — running `pytest` after any change immediately confirms whether existing behavior still works, instead of manually re-clicking through Swagger UI every time, which doesn't scale and gets skipped under time pressure (exactly when bugs slip through). Tests are also one of the clearest signals of production-readiness in an interview, since untested code is hard for a team to trust or build on.
+
+**How it works:**
+1. Used FastAPI's `TestClient` to call endpoints directly in Python, simulating real HTTP requests without needing a running server
+2. Used `unittest.mock` to fake out the Redis connection for the job-queuing test, so the test suite runs fast and doesn't spend real Gemini API credits or require Redis to be running every time tests execute
+3. Tested both "happy path" behavior (valid uploads succeed) and failure cases (invalid file types, empty files, oversized files, non-existent IDs) — failure-case coverage is what separates thorough tests from superficial ones
+
+**What I validated:**
+- Initial run: 7 passed, 1 failed
+- The failure (`AttributeError: 'State' object has no attribute 'redis'`) was a real bug in the test setup, not the app: FastAPI's startup event (which connects to Redis) only fires when `TestClient` is used as a context manager (`with TestClient(app) as c:`). The original test file created the client without that context manager, so the startup event never ran and `app.state.redis` was never initialized.
+- Fixed with an `autouse=True` pytest fixture that wraps client creation in the required `with` block, ensuring startup/shutdown events fire before every test
+- Final result: all 8 tests passing
+
+**What I noted for later:**
+- Noticed a `DeprecationWarning`: FastAPI's `@app.on_event("startup"/"shutdown")` pattern is deprecated in favor of "lifespan handlers." Not urgent — logged as a small polish item for Week 3 cleanup, not worth context-switching for mid-testing.
+- Mocking external services (Redis, and eventually Gemini) rather than calling them for real in tests is a deliberate choice: tests should verify *my code's logic*, not re-test third-party services I already trust to work.
+
+**Interview-ready one-liner:** "I wrote a pytest suite covering both success and failure paths, and hit a real bug in my own test setup along the way — FastAPI's startup events don't fire with TestClient unless you use it as a context manager, which is a subtle but common gotcha. Debugging that taught me more about FastAPI's lifecycle than the passing tests did."
+
+---
+
+## Day 9 — Containerization with Docker + Postgres Migration
+
+**What I built:** Wrapped the entire application in Docker: a `Dockerfile` for the app code, and a `docker-compose.yml` orchestrating four services together — the FastAPI app, the arq worker, PostgreSQL, and Redis. Also migrated the database from SQLite to Postgres.
+
+**Why this approach:** Up to this point, the project only ran reliably on my exact machine, with exactly what I'd installed locally. Docker packages the app with everything it needs (Python version, dependencies, configuration) into portable containers that behave identically anywhere — my laptop, a teammate's machine, or a cloud server. This is also the natural point to move off SQLite, since SQLite isn't built for multiple processes (API + worker) writing concurrently, while Postgres is what's actually used in production systems.
+
+**How it works:**
+1. `Dockerfile` builds one image containing the app code and dependencies; `api` and `worker` services both use this same image, just with different startup commands (`uvicorn` vs `arq worker.WorkerSettings`)
+2. `docker-compose.yml` defines all four services and puts them on a shared private network, where each container can reach others by service name (e.g. `db`, `redis`) instead of `localhost`
+3. `depends_on` with `condition: service_healthy` ensures the API and worker don't start until Postgres and Redis are actually ready to accept connections, avoiding startup race conditions
+4. `database.py`'s connection string was changed to read from an environment variable (`DATABASE_URL`), so switching from SQLite to Postgres required no changes to the actual data model or query code — only the connection string
+
+**What I validated:**
+- Confirmed all four containers (`db`, `redis`, `api`, `worker`) start successfully together via `docker compose up --build`
+- Ran the full end-to-end flow through the containerized stack: upload receipt → job queued → worker processes it → result saved to Postgres → retrievable via `/receipts`
+
+**What I noted for later — real problems debugged, not just theory:**
+- **Port conflicts:** Local system-level Redis (installed Day 6) and a local Postgres install were already occupying ports 6379/5432, colliding with Docker's containers trying to use the same ports. Fixed by stopping the system services, since Docker now owns those ports for this project.
+- **DNS resolution failures between containers:** Leftover containers from a previous failed run weren't cleanly attached to a fresh Docker network, causing `could not translate host name "db"` errors. Fixed with `docker compose down -v --remove-orphans` followed by a completely fresh `up --build`.
+- **Missing environment variable:** `docker-compose.yml` initially didn't pass `REDIS_HOST` to the containers, so the code fell back to its default (`localhost`) — which inside a container refers to itself, not the separate Redis container. Fixed by explicitly setting `REDIS_HOST: redis` in the compose file.
+- This day involved genuine infrastructure debugging (distinguishing "my code is wrong" vs. "my environment has a port conflict" vs. "the network needs a clean restart") rather than application logic — this is realistic day-to-day engineering work, not just following a tutorial.
+
+**Interview-ready one-liner:** "Containerizing the app surfaced real infrastructure issues — port conflicts with local services, Docker networking/DNS timing, and a missing environment variable — that taught me more about how distributed systems actually fail than the working version would have. Debugging those, rather than avoiding them, is what made the deployment genuinely production-shaped."
+
+---
+
+## Day 11 — Duplicate Detection + Docker Networking Fix
+
+**What I built:** A `GET /duplicates` endpoint that scans all saved receipts and groups together likely duplicates — same vendor (case-insensitive), same amount (within rounding tolerance), and dates within 3 days of each other. Also resolved a deep Docker networking issue that was silently blocking all outbound API calls from inside containers.
+
+**Why this approach:** This feature mirrors real payment reconciliation work from professional experience (Fonepay integration) — catching the same transaction submitted or recorded more than once. Exact-match comparison isn't enough in practice, since duplicates are often submitted a day or two apart, not on the identical date — hence the 3-day tolerance window rather than requiring an exact date match. Receipts missing vendor, amount, or date are skipped entirely, since flagging a false duplicate is worse than missing a real one when the data isn't confident enough to compare.
+
+**How it works:**
+1. Fetches all saved receipts, ordered oldest to newest
+2. For each unchecked receipt, compares it against all later receipts on vendor + amount + date proximity
+3. Matching receipts get grouped together and marked as checked, so they're not re-compared or double-counted in a later group
+4. Returns a summary: how many duplicate groups were found, and which receipt IDs belong to each group
+
+**What I validated:**
+- Uploaded the same receipt image twice — confirmed both entries appeared correctly grouped together in `/duplicates`
+- Uploaded a genuinely different receipt afterward — confirmed it did not get incorrectly grouped with the earlier ones
+
+**What I noted for later — the Docker networking deep-dive:**
+- After moving to Docker, background jobs got permanently stuck at `in_progress`, with no error — the worker had successfully connected to Redis and picked up the job, but silently hung trying to reach Gemini's API
+- Diagnosed step by step: confirmed Redis/Postgres connectivity was fine (internal Docker networking worked), then tested raw outbound internet access from inside the container directly (`urllib.request.urlopen(...)`), which failed with `OSError: Network is unreachable` — isolating the problem to outbound network access specifically, not DNS or the app code
+- Root cause: Ubuntu's UFW firewall has a default forward policy that blocks Docker's container traffic from reaching the internet, even though UFW's visible rules only appeared to control inbound ports. This is a known, documented conflict between UFW and Docker's independent iptables management — not something obvious from the app logs alone
+- Fixed by adjusting UFW's forward policy and explicitly allowing routing on Docker's network interface
+
+**What I noted for later:**
+- This class of bug (silent hang, no error, no stack trace) is genuinely harder to debug than a crash, since there's no error message pointing anywhere — the fix came from systematically testing each network hop (Redis ✅, Postgres ✅, external internet ❌) rather than guessing
+- Deployment platforms (Railway/Render) manage their own container networking, so this specific local firewall conflict likely won't reappear once deployed — but the debugging process (isolating which network hop fails) is a transferable skill regardless of where it runs
+
+**Interview-ready one-liner:** "I built duplicate detection that mirrors real reconciliation logic from my Fonepay integration work, but the more interesting problem that day was a silent Docker networking failure — jobs would hang indefinitely with zero errors. I traced it by testing connectivity at each network hop individually, which isolated it to a UFW firewall policy silently blocking Docker's outbound traffic, a known but non-obvious conflict between how UFW and Docker each manage iptables."
+
+---
+
+## Day 12 — Review-Before-Save Architecture + Spending Summary
+
+**What I built:** Reworked the core data flow so extraction and storage are two separate steps, with a human review checkpoint in between. Added `POST /receipts` as the only place a record actually gets written, and `GET /summary` for a quick spending overview (total spent, receipt count, breakdown by category).
+
+**Why this approach:** Every earlier version saved straight to the database the moment Gemini finished extracting. That's fine for a demo, but it's the wrong pattern for anything touching financial data — an LLM's read of a blurry photo can be wrong, and writing that straight into a ledger with zero human checkpoint means mistakes go in silently. So `worker.py` no longer touches the database at all; it just returns what it read. `POST /receipts` is the sole write path, and it's called with whatever the user actually confirmed — which may differ from the model's first guess.
+
+For `/summary`, category values come from the LLM (see Day 3/6), not from rule-based logic — so the endpoint normalizes anything outside the known category set into `"other"` before aggregating, rather than trusting the model's output blindly even for a low-stakes field.
+
+**How it works:**
+1. `POST /extract` → background job → returns structured data, nothing saved
+2. Frontend renders an editable review form pre-filled with the model's answers
+3. User corrects anything wrong, hits Confirm
+4. `POST /receipts` validates and writes the (possibly corrected) data
+5. `GET /summary` aggregates `SUM(total_amount)` and `COUNT(*)` grouped by category, via SQLAlchemy's `func.sum`/`func.count`
+
+**What I validated:**
+- Confirmed extraction no longer creates a database row on its own — only `POST /receipts` does
+- Tested `/summary` with several saved receipts across different categories, confirmed totals matched manual addition
+- Tested an edge case: a category value outside the known set folds into `"other"` instead of appearing as a stray row
+
+**What I noted for later:** This is a good "I didn't just wire up an API call" story for interviews — the review step exists specifically because I understood that LLM output touching financial records needs a human checkpoint, not because a tutorial told me to add one.
+
+**Interview-ready one-liner:** "I deliberately separated extraction from storage — the model proposes structured data, but nothing gets written to the database until a human confirms it. That's not a UX nicety, it's the right pattern for any system where an AI's mistake would otherwise land silently in a financial record."
+
+---
+
+## Day 12b — Document Type: Why It's Manual, Not LLM-Guessed
+
+**What I built:** A `document_type` field (Receipt / Sales Invoice / Purchase Invoice) on every saved record, chosen explicitly by the user rather than inferred by the model.
+
+**Why this approach:** This came out of directly comparing it to `category`, which *is* LLM-judged. The difference is stakes: getting `category` wrong means a grocery receipt sits under "shopping" instead of "food" — cosmetic. Getting `document_type` wrong means a transaction is recorded on the wrong side of the ledger entirely — Sales Invoices are revenue, Purchase Invoices are expenses, and conflating them corrupts financial reporting, not just organization. I considered having the LLM guess document type (the way it already guesses category) and pre-selecting the toggle, letting the user override — and deliberately rejected it. The higher the financial consequence of a field being wrong, the less appropriate it is to let a probabilistic model decide it unsupervised.
+
+**What I noted for later:** In a real ERP-embedded version of this (rather than a standalone demo), this wouldn't be a manual toggle at all — it'd be inferred from *context* (which page/module the upload happens on), not from either the user picking it or the LLM guessing it. The current toggle is a reasonable stand-in specifically because this is a single-page standalone demo without separate contextual pages to embed into.
+
+**Interview-ready one-liner:** "I use the LLM to classify low-stakes fields like spending category, but kept document type — which determines whether a transaction is revenue or expense — as mandatory human input. The rule I used: the more financially consequential a field is, the less it belongs to a probabilistic model without confirmation."
+
+---
+
+## Day 13 — Frontend Build: Upload, Review, and a Live Saved-Documents List
+
+**What I built:** A full frontend (`static/index.html`) — document type selection, drag-and-drop upload with a live scan animation during extraction, an editable review card with confidence-level framing, and a "Saved Documents" table that updates immediately after every save.
+
+**Why this approach:** The review step (Day 12) needed a real UI to be meaningful — a backend endpoint that supports correction is pointless if nothing in the product actually shows the user what to correct. Confidence level is surfaced directly in the review screen's copy and color (green for high confidence, red for low), so a shaky extraction is visually flagged before the user even reads the fields, not buried in a generic form.
+
+**How it works:**
+- Upload → `POST /extract`, then polls `GET /jobs/{id}` every 1.5s until complete
+- On completion, renders editable fields for every extracted value, plus line items (add/remove/edit)
+- Confirm → `POST /receipts`, then immediately re-fetches `GET /receipts` to refresh the saved-documents list — no page reload needed
+- Frontend is served directly by FastAPI at `/app` via `StaticFiles`, so the API and frontend share an origin (no CORS dependency for normal use, though CORS middleware stays enabled as a fallback for standalone use)
+
+**What I validated:**
+- Full loop tested end-to-end: upload → review → intentionally edit a field to confirm the correction actually persists → confirm → see it appear in the saved list
+- Tested the low-confidence path specifically (blurry image) to confirm the red warning state renders correctly
+- Confirmed `GET /extract`'s quota-exceeded errors (hit Gemini's free-tier 20/day cap during testing) surface as a clean readable message in the UI instead of a raw 500, after wrapping the Gemini call in `worker.py` with explicit exception handling
+
+**What I noted for later:** Hit Gemini's free-tier quota mid-testing, which exposed a real bug — the raw `ResourceExhausted` exception isn't picklable, so `arq` failed a second time trying to serialize it as the job result. Fixed by catching API errors in the worker and always returning a plain, serializable dict. Good lesson: even "just show the error to the user" needs to account for whether the error object itself can survive the serialization boundary it's crossing.
+
+**Interview-ready one-liner:** "Building the frontend surfaced a real backend bug — an uncaught API exception that wasn't picklable, which crashed the job serialization layer on top of the original error. Fixing it taught me to think about error handling across process boundaries, not just within a single function."
+
+---

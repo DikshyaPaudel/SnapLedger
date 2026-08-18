@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SnapLedger — Receipt & Invoice Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #F6F1E4;
+    --paper-dark: #EDE5D0;
+    --ink: #1E2530;
+    --ink-soft: #565C66;
+    --stamp: #A83C3C;
+    --line: #D8CFB8;
+    --olive: #6B7156;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(30,37,48,0.05) 1px, transparent 0);
+    background-size: 22px 22px;
+    color: var(--ink);
+    font-family: 'IBM Plex Mono', monospace;
+    min-height: 100vh;
+    padding: 48px 20px 80px;
+  }
+
+  .wrap { max-width: 640px; margin: 0 auto; }
+
+  header { text-align: center; margin-bottom: 36px; }
+
+  .eyebrow {
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--olive);
+    margin-bottom: 10px;
+  }
+
+  h1 {
+    font-family: 'Special Elite', 'IBM Plex Mono', monospace;
+    font-size: 40px;
+    color: var(--ink);
+    letter-spacing: 0.01em;
+  }
+
+  .sub {
+    font-family: 'Source Serif 4', serif;
+    font-size: 16px;
+    color: var(--ink-soft);
+    margin-top: 10px;
+    font-style: italic;
+  }
+
+  .hero-transform {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    margin-bottom: 30px;
+  }
+
+  .hero-side {
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 16px 18px;
+    text-align: center;
+    width: 168px;
+    box-shadow: 0 6px 16px rgba(30,37,48,0.06);
+  }
+
+  .hero-before { transform: rotate(-2deg); }
+  .hero-after { transform: rotate(2deg); border-color: var(--olive); }
+
+  .hero-tag {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    color: var(--ink-soft);
+    margin-bottom: 10px;
+  }
+
+  .hero-after .hero-tag { color: var(--olive); font-weight: 600; }
+
+  .hero-emoji { font-size: 32px; margin-bottom: 8px; filter: grayscale(0.2); }
+
+  .hero-json {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    text-align: left;
+    background: var(--paper);
+    border-radius: 3px;
+    padding: 8px 10px;
+    color: var(--olive);
+    line-height: 1.5;
+    margin-bottom: 8px;
+  }
+
+  .hero-caption {
+    font-size: 10px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+
+  .hero-arrow { flex-shrink: 0; opacity: 0.7; }
+
+  @media (max-width: 480px) {
+    .hero-transform { flex-direction: column; }
+    .hero-arrow { transform: rotate(90deg); }
+  }
+
+  .doctype-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 18px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .doctype-btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    padding: 9px 16px;
+    background: white;
+    border: 1.5px solid var(--line);
+    border-radius: 3px;
+    color: var(--ink-soft);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .doctype-btn:hover { border-color: var(--olive); }
+
+  .doctype-btn.active {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--paper);
+  }
+  .upload-zone {
+    display: block;
+    position: relative;
+    width: 100%;
+}
+
+  .upload-zone {
+    background: white;
+    border: 2px dashed var(--line);
+    border-radius: 4px;
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+    position: relative;
+  }
+
+  .upload-zone:hover, .upload-zone.dragover {
+    border-color: var(--olive);
+    background: #FDFCF8;
+  }
+
+  .upload-zone input[type=file] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .upload-icon {
+    font-size: 28px;
+    margin-bottom: 12px;
+    display: block;
+    width: 100%;
+    line-height: 1;
+  }
+
+  .upload-label {
+    font-family: 'Source Serif 4', serif;
+    font-size: 17px;
+    color: var(--ink);
+  }
+
+  .upload-hint {
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-top: 8px;
+    letter-spacing: 0.03em;
+  }
+
+  #preview-wrap {
+    margin-top: 0;
+    text-align: center;
+    display: none;
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 24px;
+    box-shadow: 0 6px 16px rgba(30,37,48,0.06);
+  }
+
+  #preview {
+    max-width: 180px;
+    max-height: 180px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    display: block;
+    margin: 0 auto;
+  }
+
+  .change-file-link {
+    display: inline-block;
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--olive);
+    cursor: pointer;
+    text-decoration: underline;
+    letter-spacing: 0.03em;
+  }
+
+  .preview-frame { position: relative; display: inline-block; }
+
+  .preview-frame.scanning::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--olive), transparent);
+    box-shadow: 0 0 8px var(--olive);
+    animation: scan-sweep 1.6s ease-in-out infinite;
+  }
+
+  @keyframes scan-sweep {
+    0% { top: 0; opacity: 0.9; }
+    50% { top: 100%; opacity: 0.9; }
+    51% { opacity: 0; }
+    52% { top: 0; opacity: 0; }
+    60% { opacity: 0.9; }
+    100% { top: 100%; opacity: 0.9; }
+  }
+
+  .status-line {
+    margin-top: 20px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--ink-soft);
+    min-height: 18px;
+    letter-spacing: 0.02em;
+  }
+
+  .status-line.active::after {
+    content: '';
+    display: inline-block;
+    width: 6px; height: 6px;
+    background: var(--olive);
+    border-radius: 50%;
+    margin-left: 8px;
+    animation: pulse 1s infinite ease-in-out;
+    vertical-align: middle;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 1; }
+  }
+
+  .card {
+    margin-top: 32px;
+    background: white;
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 28px 26px 24px;
+    box-shadow: 0 18px 34px rgba(30,37,48,0.12), 0 2px 6px rgba(30,37,48,0.06);
+    position: relative;
+    opacity: 0;
+    transform: translateY(-14px);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+  }
+
+  .card.show { opacity: 1; transform: translateY(0); }
+
+  .card::before {
+    content: '';
+    position: absolute;
+    top: -1px; left: 0; right: 0;
+    height: 10px;
+    background-image: radial-gradient(circle at 8px 0, transparent 7px, white 7px);
+    background-size: 16px 10px;
+    background-repeat: repeat-x;
+  }
+
+  .review-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-align: center;
+    margin-bottom: 16px;
+    font-weight: 600;
+  }
+
+  .review-label.conf-high { color: var(--olive); }
+  .review-label.conf-medium { color: #8A7433; }
+  .review-label.conf-low { color: var(--stamp); }
+
+  .field-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .field label {
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+
+  .field input, .field select {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 7px 8px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    background: var(--paper);
+    color: var(--ink);
+  }
+
+  .field input:focus, .field select:focus {
+    outline: none;
+    border-color: var(--olive);
+    background: white;
+  }
+
+  .r-divider {
+    border: none;
+    border-top: 1px dashed var(--line);
+    margin: 16px 0 12px;
+  }
+
+  .line-items-label {
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 8px;
+  }
+
+  .line-item-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 6px;
+    align-items: center;
+  }
+
+  .line-item-row input:first-child { flex: 2; }
+  .line-item-row input:last-child { flex: 1; }
+
+  .remove-item-btn {
+    background: none;
+    border: none;
+    color: var(--stamp);
+    cursor: pointer;
+    font-size: 15px;
+    padding: 0 4px;
+    line-height: 1;
+  }
+
+  .add-item-btn {
+    font-size: 11px;
+    color: var(--olive);
+    background: none;
+    border: 1px dashed var(--line);
+    border-radius: 2px;
+    padding: 6px 10px;
+    cursor: pointer;
+    margin-top: 4px;
+    width: 100%;
+  }
+
+  .add-item-btn:hover { border-color: var(--olive); }
+
+  .action-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+  }
+
+  .btn {
+    flex: 1;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.03em;
+    padding: 11px;
+    border-radius: 3px;
+    cursor: pointer;
+    border: 1.5px solid transparent;
+    transition: opacity 0.15s ease;
+  }
+
+  .btn:hover { opacity: 0.85; }
+
+  .btn-confirm { background: var(--ink); color: var(--paper); }
+  .btn-discard { background: white; border-color: var(--line); color: var(--ink-soft); }
+
+  .r-vendor {
+    font-family: 'Special Elite', monospace;
+    font-size: 19px;
+    text-align: center;
+    margin-bottom: 2px;
+  }
+
+  .r-meta {
+    text-align: center;
+    font-size: 11px;
+    color: var(--ink-soft);
+    letter-spacing: 0.04em;
+    margin-bottom: 16px;
+  }
+
+  .r-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 4px 0;
+    color: var(--ink);
+  }
+
+  .r-row .item-name { color: var(--ink-soft); }
+
+  .r-total {
+    display: flex;
+    justify-content: space-between;
+    font-size: 17px;
+    font-weight: 600;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 2px solid var(--ink);
+  }
+
+  .r-badge {
+    display: inline-block;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+    margin-top: 14px;
+  }
+
+  .r-badge.high { background: #E7ECE1; color: var(--olive); }
+  .r-badge.medium { background: #F3ECD9; color: #8A7433; }
+  .r-badge.low { background: #F2E1DF; color: var(--stamp); }
+
+  .r-stamp {
+    display: inline-block;
+    font-family: 'Special Elite', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    margin-top: 14px;
+    margin-left: 6px;
+    border: 1.5px solid var(--olive);
+    color: var(--olive);
+    border-radius: 2px;
+    transform: rotate(-2deg);
+  }
+
+  .r-footer {
+    text-align: center;
+    font-size: 10px;
+    color: var(--ink-soft);
+    margin-top: 18px;
+    letter-spacing: 0.06em;
+  }
+
+  .new-upload-link {
+    display: block;
+    text-align: center;
+    margin-top: 18px;
+    font-size: 12px;
+    color: var(--olive);
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .error-note {
+    margin-top: 20px;
+    background: #F2E1DF;
+    border-left: 3px solid var(--stamp);
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--stamp);
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
+    display: none;
+  }
+
+  footer.page-footer {
+    text-align: center;
+    margin-top: 60px;
+    font-size: 11px;
+    color: var(--ink-soft);
+    letter-spacing: 0.05em;
+  }
+
+  .ledger-section {
+    max-width: 460px;
+    margin: 48px auto 0;
+  }
+
+  .ledger-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+  }
+
+  .ledger-title {
+    font-family: 'Special Elite', monospace;
+    font-size: 16px;
+    letter-spacing: 0.02em;
+  }
+
+  .ledger-count {
+    font-size: 11px;
+    color: var(--ink-soft);
+    letter-spacing: 0.03em;
+  }
+
+  .ledger-list { }
+
+  .ledger-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 4px;
+    border-bottom: 1px dashed var(--line);
+    font-size: 12.5px;
+    opacity: 0;
+    animation: row-in 0.4s ease forwards;
+  }
+
+  @keyframes row-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .ledger-row .lr-type {
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 2px;
+    background: var(--paper-dark);
+    color: var(--ink-soft);
+    flex-shrink: 0;
+    width: 68px;
+    text-align: center;
+  }
+
+  .ledger-row .lr-type.sales_invoice { background: #E7ECE1; color: var(--olive); }
+  .ledger-row .lr-type.purchase_invoice { background: #F2E1DF; color: var(--stamp); }
+
+  .ledger-row .lr-vendor {
+    flex: 1.2;
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ledger-row .lr-date {
+    color: var(--ink-soft);
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  .ledger-row .lr-amount {
+    font-weight: 600;
+    flex-shrink: 0;
+    min-width: 64px;
+    text-align: right;
+  }
+
+  .ledger-columns {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 4px 8px;
+    border-bottom: 1px solid var(--ink);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+
+  .ledger-columns .lc-type { flex-shrink: 0; width: 68px; text-align: center; }
+  .ledger-columns .lc-vendor { flex: 1.2; }
+  .ledger-columns .lc-date { flex-shrink: 0; width: 74px; }
+  .ledger-columns .lc-amount { flex-shrink: 0; min-width: 64px; text-align: right; }
+
+  .ledger-empty {
+    text-align: center;
+    color: var(--ink-soft);
+    font-size: 12px;
+    padding: 24px 0;
+    font-family: 'Source Serif 4', serif;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Snap · Review · Reconcile</div>
+    <h1>SnapLedger</h1>
+    <p class="sub">Messy paper in. Clean, reviewed data out — before it ever touches your ledger.</p>
+  </header>
+
+  <div class="hero-transform">
+    <div class="hero-side hero-before">
+      <div class="hero-tag">BEFORE</div>
+      <div class="hero-emoji">🧾</div>
+      <div class="hero-caption">crumpled receipt<br>blurry photo<br>handwritten total</div>
+    </div>
+    <div class="hero-arrow">
+      <svg width="36" height="20" viewBox="0 0 36 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M1 10H34M34 10L25 2M34 10L25 18" stroke="#6B7156" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="hero-side hero-after">
+      <div class="hero-tag">AFTER</div>
+      <div class="hero-json">{<br>&nbsp;&nbsp;vendor: "…",<br>&nbsp;&nbsp;total: 18.83,<br>&nbsp;&nbsp;category: "food"<br>}</div>
+      <div class="hero-caption">structured · reviewed · yours</div>
+    </div>
+  </div>
+
+  <div class="doctype-row" id="doctype-row">
+    <button type="button" class="doctype-btn active" data-type="receipt">Receipt</button>
+    <button type="button" class="doctype-btn" data-type="sales_invoice">Sales Invoice</button>
+    <button type="button" class="doctype-btn" data-type="purchase_invoice">Purchase Invoice</button>
+  </div>
+
+  <label class="upload-zone" id="drop-zone">
+    <span class="upload-icon">⬆️</span>
+    <span class="upload-label">Drop a document, or click to upload</span>
+    <span class="upload-hint">JPG OR PNG · READ BY GEMINI VISION</span>
+    <input type="file" id="file-input" accept="image/*">
+  </label>
+
+  <div id="preview-wrap">
+    <div class="preview-frame" id="preview-frame">
+      <img id="preview" alt="Document preview">
+    </div>
+    <span class="change-file-link" id="change-file-link">Choose a different file</span>
+  </div>
+
+  <div class="status-line" id="status-line"></div>
+
+  <div class="card" id="review-card"></div>
+  <div class="card" id="final-card"></div>
+  <div class="error-note" id="error-note"></div>
+
+  <section class="ledger-section">
+    <div class="ledger-header">
+      <span class="ledger-title">Saved Documents</span>
+      <span class="ledger-count" id="ledger-count"></span>
+    </div>
+    <div class="ledger-columns">
+      <span class="lc-type">Type</span>
+      <span class="lc-vendor">Vendor / Customer </span>
+      <span class="lc-date">Date</span>
+      <span class="lc-amount">Amount</span>
+    </div>
+    <div id="ledger-list" class="ledger-list"></div>
+  </section>
+
+  <footer class="page-footer">Built with FastAPI · arq · Gemini Vision · PostgreSQL</footer>
+</div>
+
+<script>
+  // When served by FastAPI (from /app), the page and API share an origin --
+  // use relative paths, no CORS needed. If opened directly as a local file
+  // (file://), fall back to the explicit local API address.
+  const API_BASE = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
+
+  const DOCTYPE_LABELS = {
+    receipt: 'Receipt',
+    sales_invoice: 'Sales Inv.',
+    purchase_invoice: 'Purch. Inv.',
+  };
+
+  let selectedDocType = 'receipt';
+  let currentLineItems = [];
+
+  const doctypeRow = document.getElementById('doctype-row');
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const previewWrap = document.getElementById('preview-wrap');
+  const changeFileLink = document.getElementById('change-file-link');
+  const previewFrame = document.getElementById('preview-frame');
+  const preview = document.getElementById('preview');
+  const statusLine = document.getElementById('status-line');
+  const reviewCard = document.getElementById('review-card');
+  const finalCard = document.getElementById('final-card');
+  const errorNote = document.getElementById('error-note');
+  const ledgerList = document.getElementById('ledger-list');
+  const ledgerCount = document.getElementById('ledger-count');
+
+  doctypeRow.addEventListener('click', (e) => {
+    const btn = e.target.closest('.doctype-btn');
+    if (!btn) return;
+    selectedDocType = btn.dataset.type;
+    document.querySelectorAll('.doctype-btn').forEach(b => b.classList.toggle('active', b === btn));
+  });
+
+  async function fetchLedger() {
+    try {
+      const res = await fetch(`${API_BASE}/receipts`);
+      const receipts = await res.json();
+      renderLedger(Array.isArray(receipts) ? receipts : []);
+    } catch (err) {
+      ledgerList.innerHTML = `<div class="ledger-empty">Couldn't reach the API to load the ledger.</div>`;
+    }
+  }
+
+  function renderLedger(allEntries) {
+    // Shows every saved document type -- receipts, sales invoices, purchase
+    // invoices -- side by side, with the Type column distinguishing them.
+    ledgerCount.textContent = allEntries.length ? `${allEntries.length} item${allEntries.length === 1 ? '' : 's'}` : '';
+
+    if (!allEntries.length) {
+      ledgerList.innerHTML = `<div class="ledger-empty">Nothing saved yet — confirm an upload to see it here.</div>`;
+      return;
+    }
+
+    // newest first
+    const sorted = [...allEntries].sort((a, b) => (b.id || 0) - (a.id || 0));
+
+    ledgerList.innerHTML = sorted.map((r, i) => `
+      <div class="ledger-row" style="animation-delay:${Math.min(i, 8) * 0.04}s">
+        <span class="lr-type ${r.document_type || 'receipt'}">${(DOCTYPE_LABELS[r.document_type] || 'Receipt')}</span>
+        <span class="lr-vendor">${escapeHtml(r.vendor || 'Unknown vendor')}</span>
+        <span class="lr-date">${r.date || '—'}</span>
+        <span class="lr-amount">${formatMoney(r.total_amount, r.currency)}</span>
+      </div>
+    `).join('');
+  }
+
+  fetchLedger();
+
+  changeFileLink.addEventListener('click', () => {
+    resetCards();
+    previewWrap.style.display = 'none';
+    dropZone.style.display = 'block';
+    fileInput.value = '';
+    setStatus('', false);
+  });
+
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files[0]) handleFile(e.target.files[0]);
+  });
+
+  ['dragover', 'dragleave', 'drop'].forEach(evt => {
+    dropZone.addEventListener(evt, (e) => e.preventDefault());
+  });
+  dropZone.addEventListener('dragover', () => dropZone.classList.add('dragover'));
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', (e) => {
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+
+  function handleFile(file) {
+    resetCards();
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      preview.src = e.target.result;
+      previewWrap.style.display = 'block';
+      dropZone.style.display = 'none';
+    };
+    reader.readAsDataURL(file);
+
+    uploadReceipt(file);
+  }
+
+  function resetCards() {
+    reviewCard.classList.remove('show');
+    reviewCard.innerHTML = '';
+    finalCard.classList.remove('show');
+    finalCard.innerHTML = '';
+    errorNote.style.display = 'none';
+    previewFrame.classList.remove('scanning');
+  }
+
+  async function uploadReceipt(file) {
+    setStatus('Uploading and queuing extraction…', true);
+    previewFrame.classList.add('scanning');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`${API_BASE}/extract`, { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showError(data.detail || 'Something went wrong.');
+        return;
+      }
+
+      pollJob(data.job_id);
+    } catch (err) {
+      showError('Could not reach the API. Is it running at ' + API_BASE + '?');
+    }
+  }
+
+  async function pollJob(jobId) {
+    setStatus('Reading the document…', true);
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/jobs/${jobId}`);
+        const data = await res.json();
+
+        if (data.status === 'complete') {
+          clearInterval(interval);
+          previewFrame.classList.remove('scanning');
+          if (data.result && data.result.error) {
+            showError(data.result.error);
+          } else {
+            setStatus('Extracted. Review before saving.', false);
+            renderReviewForm(data.result);
+          }
+        } else if (data.status && data.status.toLowerCase().includes('fail')) {
+          clearInterval(interval);
+          previewFrame.classList.remove('scanning');
+          showError('Extraction failed. Try a clearer image.');
+        }
+      } catch (err) {
+        clearInterval(interval);
+        showError('Lost connection while checking job status.');
+      }
+    }, 1500);
+  }
+
+  function setStatus(text, active) {
+    statusLine.textContent = text;
+    statusLine.classList.toggle('active', !!active);
+  }
+
+  function showError(msg) {
+    setStatus('', false);
+    errorNote.textContent = msg;
+    errorNote.style.display = 'block';
+  }
+
+  function renderReviewForm(r) {
+    currentLineItems = (r.line_items || []).map(li => ({
+      description: li.description || '',
+      amount: li.amount ?? '',
+    }));
+
+    const confidenceLevel = (r.confidence || 'medium').toLowerCase();
+    const confidenceCopy = {
+      high: 'Extracted with high confidence',
+      medium: 'Extracted with medium confidence — worth a quick check',
+      low: 'Low confidence — please review carefully',
+    }[confidenceLevel] || 'Extracted';
+
+    reviewCard.innerHTML = `
+      <div class="field-row">
+        <div class="field">
+          <label for="f-vendor">Vendor</label>
+          <input id="f-vendor" type="text" value="${escapeAttr(r.vendor || '')}">
+        </div>
+        <div class="field">
+          <label for="f-date">Date</label>
+          <input id="f-date" type="text" value="${escapeAttr(r.date || '')}" placeholder="YYYY-MM-DD">
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="f-currency">Currency</label>
+          <input id="f-currency" type="text" value="${escapeAttr(r.currency || '')}">
+        </div>
+        <div class="field">
+          <label for="f-category">Category</label>
+          <select id="f-category">
+            ${['food','transport','utilities','shopping','health','other'].map(c =>
+              `<option value="${c}" ${c === r.category ? 'selected' : ''}>${c}</option>`
+            ).join('')}
+          </select>
+        </div>
+      </div>
+
+      <hr class="r-divider">
+      <div class="line-items-label">Line items</div>
+      <div id="line-items-wrap"></div>
+      <button type="button" class="add-item-btn" id="add-item-btn">+ Add line item</button>
+
+      <hr class="r-divider">
+      <div class="field-row">
+        <div class="field">
+          <label for="f-total">Total amount</label>
+          <input id="f-total" type="number" step="0.01" value="${r.total_amount ?? ''}">
+        </div>
+        <div class="field">
+          <label>Document type</label>
+          <input type="text" value="${DOCTYPE_LABELS[selectedDocType]}" disabled>
+        </div>
+      </div>
+
+      <div class="action-row">
+        <button type="button" class="btn btn-discard" id="discard-btn">Discard</button>
+        <button type="button" class="btn btn-confirm" id="confirm-btn">Confirm & Save</button>
+      </div>
+    `;
+
+    renderLineItems();
+    requestAnimationFrame(() => reviewCard.classList.add('show'));
+
+    document.getElementById('add-item-btn').addEventListener('click', () => {
+      currentLineItems.push({ description: '', amount: '' });
+      renderLineItems();
+    });
+
+    document.getElementById('discard-btn').addEventListener('click', () => {
+      resetCards();
+      previewWrap.style.display = 'none';
+      dropZone.style.display = 'block';
+      fileInput.value = '';
+      setStatus('Discarded. Upload another to try again.', false);
+    });
+
+    document.getElementById('confirm-btn').addEventListener('click', confirmAndSave);
+  }
+
+  function renderLineItems() {
+    const wrap = document.getElementById('line-items-wrap');
+    wrap.innerHTML = currentLineItems.map((item, i) => `
+      <div class="line-item-row" data-index="${i}">
+        <input type="text" class="li-desc" value="${escapeAttr(item.description)}" placeholder="Description">
+        <input type="number" step="0.01" class="li-amount" value="${item.amount}" placeholder="Amount">
+        <button type="button" class="remove-item-btn" data-remove="${i}">✕</button>
+      </div>
+    `).join('') || '<div style="font-size:12px;color:var(--ink-soft);">No line items detected — add one if needed.</div>';
+
+    wrap.querySelectorAll('.remove-item-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        currentLineItems.splice(Number(btn.dataset.remove), 1);
+        syncLineItemsFromInputs();
+        renderLineItems();
+      });
+    });
+  }
+
+  function syncLineItemsFromInputs() {
+    const rows = document.querySelectorAll('#line-items-wrap .line-item-row');
+    rows.forEach((row, i) => {
+      if (!currentLineItems[i]) return;
+      currentLineItems[i].description = row.querySelector('.li-desc').value;
+      currentLineItems[i].amount = row.querySelector('.li-amount').value;
+    });
+  }
+
+  async function confirmAndSave() {
+    syncLineItemsFromInputs();
+
+    const payload = {
+      vendor: document.getElementById('f-vendor').value || null,
+      date: document.getElementById('f-date').value || null,
+      currency: document.getElementById('f-currency').value || null,
+      category: document.getElementById('f-category').value || null,
+      total_amount: document.getElementById('f-total').value === '' ? null : Number(document.getElementById('f-total').value),
+      document_type: selectedDocType,
+      line_items: currentLineItems
+        .filter(li => li.description || li.amount !== '')
+        .map(li => ({
+          description: li.description || null,
+          amount: li.amount === '' ? null : Number(li.amount),
+        })),
+    };
+
+    const confirmBtn = document.getElementById('confirm-btn');
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Saving…';
+
+    try {
+      const res = await fetch(`${API_BASE}/receipts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const saved = await res.json();
+
+      if (!res.ok) {
+        showError(saved.detail || 'Could not save.');
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Confirm & Save';
+        return;
+      }
+
+      reviewCard.classList.remove('show');
+      reviewCard.innerHTML = '';
+      renderFinalReceipt(saved);
+      setStatus('Saved to the ledger.', false);
+      fetchLedger();
+    } catch (err) {
+      showError('Could not reach the API while saving.');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Confirm & Save';
+    }
+  }
+
+  function renderFinalReceipt(r) {
+    const lineItemsHtml = (r.line_items || []).map(item => `
+      <div class="r-row">
+        <span class="item-name">${escapeHtml(item.description || '—')}</span>
+        <span>${formatMoney(item.amount, r.currency)}</span>
+      </div>
+    `).join('');
+
+    const confidence = (r.confidence || 'medium').toLowerCase();
+
+    finalCard.innerHTML = `
+      <div class="r-vendor">${escapeHtml(r.vendor || 'Unknown vendor')}</div>
+      <div class="r-meta">${r.date || 'date unknown'} · ${escapeHtml(r.category || 'uncategorized')}</div>
+      <hr class="r-divider">
+      ${lineItemsHtml || '<div class="r-row item-name">No line items</div>'}
+      <div class="r-total">
+        <span>TOTAL</span>
+        <span>${formatMoney(r.total_amount, r.currency)}</span>
+      </div>
+      <div style="text-align:center;">
+        <span class="r-stamp">Saved</span>
+      </div>
+      <div class="r-footer">${DOCTYPE_LABELS[r.document_type] || 'Receipt'} #${r.id ?? '—'} · SNAPLEDGER</div>
+      <span class="new-upload-link" id="new-upload-link">Upload another</span>
+    `;
+    requestAnimationFrame(() => finalCard.classList.add('show'));
+
+    document.getElementById('new-upload-link').addEventListener('click', () => {
+      resetCards();
+      previewWrap.style.display = 'none';
+      dropZone.style.display = 'block';
+      fileInput.value = '';
+      setStatus('', false);
+    });
+  }
+
+  function formatMoney(amount, currency) {
+    if (amount === null || amount === undefined) return '—';
+    return `${currency || ''} ${Number(amount).toFixed(2)}`.trim();
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function escapeAttr(str) {
+    return String(str).replace(/"/g, '&quot;');
+  }
+</script>
+
+</body>
+</html>
