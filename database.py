@@ -17,8 +17,10 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "postgresql://snapledger:snapledger@localhost:5432/snapledger",
 )
-
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg2://", "postgresql://",1)
 engine = create_engine(DATABASE_URL)
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

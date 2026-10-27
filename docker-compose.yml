@@ -33,7 +33,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://snapledger:snapledger@db:5432/snapledger
+      DATABASE_URL: postgresql+psycopg2://snapledger:snapledger@db:5432/snapledger
       REDIS_HOST: redis
       GEMINI_API_KEY: ${GEMINI_API_KEY}
     depends_on:
@@ -47,7 +47,7 @@ services:
     build: .
     command: ["arq", "worker.WorkerSettings"]
     environment:
-      DATABASE_URL: postgresql://snapledger:snapledger@db:5432/snapledger
+      DATABASE_URL: postgresql+psycopg2://snapledger:snapledger@db:5432/snapledger
       REDIS_HOST: redis
       GEMINI_API_KEY: ${GEMINI_API_KEY}
     depends_on:
