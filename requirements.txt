@@ -8,3 +8,4 @@ arq
 pytest
 httpx2
 jinja2
+sqlalchemy>=2.0,<2.2
