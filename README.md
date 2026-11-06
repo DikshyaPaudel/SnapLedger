@@ -86,11 +86,6 @@ docker compose up --build
 
 Both are served by the same FastAPI process — the frontend calls the API on the same origin, no CORS setup needed for normal use. (CORS middleware is still enabled in `main.py` in case the frontend is ever opened standalone or hosted separately.)
 
-## Future optimizations (deliberately not built yet)
-
-- **OCR pre-processing to cut token cost at scale.** Right now the full receipt image is sent to Gemini, which costs more tokens than the equivalent text would, since image inputs are tokenized in a resolution-dependent way. A hybrid approach — run OCR first, then send only the extracted text to the LLM — would reduce that cost. Not built here because (a) it removes the model's access to layout/spatial context, which is exactly what makes it more robust than pure OCR on messy or skewed receipts, and (b) at this project's current scale (free-tier usage, portfolio demo), token cost isn't an actual constraint worth the added complexity of a second pipeline stage. It's the natural next optimization if this were handling production volume.
-- **Auto-detecting document type from the image**, with the user free to override, was considered and deliberately rejected — see "Known limitations" above for the reasoning.
-
 ## Tests
 
 ```bash
