@@ -17,8 +17,10 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "postgresql://snapledger:snapledger@localhost:5432/snapledger",
 )
-
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg2://", "postgresql://",1)
 engine = create_engine(DATABASE_URL)
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -38,6 +40,11 @@ class Receipt(Base):
     line_items = Column(JSON, nullable=True)  # stores the list of {description, amount} as JSON
     document_type = Column(String, nullable=True, default="receipt")  # receipt | sales_invoice | purchase_invoice
     created_at = Column(DateTime, default=datetime.utcnow)
+    # ERPNext push status
+    erpnext_name = Column(String, nullable=True)   # e.g. ACC-PINV-2026-00001
+    erpnext_url = Column(String, nullable=True)
+    pushed_at = Column(DateTime, nullable=True)
+    erpnext_error = Column(String, nullable=True)  # last push error, cleared on success
 
 
 def init_db():

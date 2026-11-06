@@ -31,9 +31,9 @@ services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
-      DATABASE_URL: postgresql://snapledger:snapledger@db:5432/snapledger
+      DATABASE_URL: postgresql+psycopg2://snapledger:snapledger@db:5432/snapledger
       REDIS_HOST: redis
       GEMINI_API_KEY: ${GEMINI_API_KEY}
     depends_on:
@@ -41,13 +41,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # For ERPNext access from Docker
 
   # Background worker (same code, different command)
   worker:
     build: .
     command: ["arq", "worker.WorkerSettings"]
     environment:
-      DATABASE_URL: postgresql://snapledger:snapledger@db:5432/snapledger
+      DATABASE_URL: postgresql+psycopg2://snapledger:snapledger@db:5432/snapledger
       REDIS_HOST: redis
       GEMINI_API_KEY: ${GEMINI_API_KEY}
     depends_on:

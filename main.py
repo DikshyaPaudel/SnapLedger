@@ -27,6 +27,7 @@ from arq.jobs import Job
 
 from database import init_db, get_db, Receipt
 from extraction import run_extraction
+from erpnext import push_document, ERPNextError, ERPNextNotConfigured, ERPNextInvalidDocument
 
 MAX_FILE_SIZE_MB = 10
 ALLOWED_DOCUMENT_TYPES = {"receipt", "sales_invoice", "purchase_invoice"}
@@ -221,6 +222,32 @@ def get_receipt(receipt_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Receipt {receipt_id} not found.")
     return receipt
 
+@app.post("/receipts/{receipt_id}/push")
+def push_receipt_to_erpnext(receipt_id: int, db: Session = Depends(get_db)):
+    """Push a saved Sales or Purchase Invoice to ERPNext as a DRAFT invoice.
+    The row is locked while pushing, so a double click cannot create two invoices."""
+    receipt = db.query(Receipt).filter(Receipt.id == receipt_id).with_for_update().first()
+    if receipt is None:
+        raise HTTPException(status_code=404, detail=f"Receipt {receipt_id} not found.")
+    if receipt.erpnext_name:
+        raise HTTPException(status_code=409, detail=f"Already pushed to ERPNext as {receipt.erpnext_name}.")
+    try:
+        result = push_document(receipt)
+    except ERPNextNotConfigured as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ERPNextInvalidDocument as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ERPNextError as e:
+        receipt.erpnext_error = str(e)
+        db.commit()
+        raise HTTPException(status_code=502, detail=str(e))
+    receipt.erpnext_name = result.name
+    receipt.erpnext_url = result.url
+    receipt.pushed_at = datetime.utcnow()
+    receipt.erpnext_error = None
+    db.commit()
+    db.refresh(receipt)
+    return receipt
 
 @app.get("/duplicates")
 def find_duplicates(db: Session = Depends(get_db)):
