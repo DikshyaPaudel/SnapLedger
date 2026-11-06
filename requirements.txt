@@ -6,6 +6,6 @@ sqlalchemy
 psycopg2-binary
 arq
 pytest
-httpx2
+httpx
 jinja2
 sqlalchemy>=2.0,<2.2

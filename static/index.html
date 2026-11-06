@@ -654,8 +654,8 @@
 
   <div class="doctype-row" id="doctype-row">
     <button type="button" class="doctype-btn active" data-type="receipt">Receipt</button>
-    <!-- <button type="button" class="doctype-btn" data-type="sales_invoice">Sales Invoice</button>
-    <button type="button" class="doctype-btn" data-type="purchase_invoice">Purchase Invoice</button> -->
+    <button type="button" class="doctype-btn" data-type="sales_invoice">Sales Invoice</button>
+    <button type="button" class="doctype-btn" data-type="purchase_invoice">Purchase Invoice</button>
   </div>
 
   <label class="upload-zone" id="drop-zone">
@@ -685,7 +685,7 @@
     </div>
     <div class="ledger-columns">
       <span class="lc-type">Type</span>
-      <span class="lc-vendor">Vendor</span>
+      <span class="lc-vendor">Vendor / Customer </span>
       <span class="lc-date">Date</span>
       <span class="lc-amount">Amount</span>
     </div>
@@ -887,7 +887,6 @@
     }[confidenceLevel] || 'Extracted';
 
     reviewCard.innerHTML = `
-
       <div class="field-row">
         <div class="field">
           <label for="f-vendor">Vendor</label>

@@ -40,6 +40,11 @@ class Receipt(Base):
     line_items = Column(JSON, nullable=True)  # stores the list of {description, amount} as JSON
     document_type = Column(String, nullable=True, default="receipt")  # receipt | sales_invoice | purchase_invoice
     created_at = Column(DateTime, default=datetime.utcnow)
+    # ERPNext push status
+    erpnext_name = Column(String, nullable=True)   # e.g. ACC-PINV-2026-00001
+    erpnext_url = Column(String, nullable=True)
+    pushed_at = Column(DateTime, nullable=True)
+    erpnext_error = Column(String, nullable=True)  # last push error, cleared on success
 
 
 def init_db():

@@ -1,5 +1,5 @@
 """
-Day 8: Tests for the SnapLedger API.
+
 
 Run with:
     pytest
